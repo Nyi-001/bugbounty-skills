@@ -38,6 +38,7 @@ bugbounty-skills/
 │   ├── cors-misconfigurations.md
 │   ├── ssrf.md
 │   ├── api-testing.md            ← REST/GraphQL, mass assignment, rate limits
+│   ├── oauth.md                  ← OAuth 2.0 / OIDC flaws, redirect_uri, state, PKCE
 │   ├── jwt-attacks.md
 │   ├── http-request-smuggling.md
 │   └── cache-poisoning.md
@@ -69,7 +70,6 @@ Bug bounty differs from pentest: duplicates matter and report quality determines
 - [ ] One-liner command cheatsheets (fast recon pipeline)
 - [ ] Working notes templates (scope tracking, finding tracker)
 - [ ] GraphQL deep-dive
-- [ ] OAuth/OIDC deep-dive
 - [ ] Mobile app testing (APK/IPA)
 - [ ] Prototype pollution & postMessage
 - [ ] WAF bypass cheatsheet
